@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling>=1.27,<1.30"]
+build-backend = "hatchling.build"
+
+[project]
+name = "daft-doris"
+version = "0.1.0a1"
+description = "Independent Daft read and Stream Load connector for Apache Doris"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "Apache-2.0"
+authors = [{ name = "jiangxt2" }]
+keywords = ["apache-doris", "daft", "olap", "stream-load"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+  "daft>=0.7.23,<0.7.24",
+  "pyarrow==19.0.1",
+]
+
+[project.optional-dependencies]
+doris = ["PyMySQL>=1.2,<1.3"]
+doris-flight = [
+  "PyMySQL>=1.2,<1.3",
+  "adbc-driver-manager>=1.6,<2",
+  "adbc-driver-flightsql>=1.6,<2",
+]
+ray = ["daft[ray]>=0.7.23,<0.7.24"]
+all = [
+  "PyMySQL>=1.2,<1.3",
+  "adbc-driver-manager>=1.6,<2",
+  "adbc-driver-flightsql>=1.6,<2",
+  "daft[ray]>=0.7.23,<0.7.24",
+]
+
+[project.urls]
+Homepage = "https://github.com/jiangxt2/daft-doris"
+Repository = "https://github.com/jiangxt2/daft-doris"
+
+[dependency-groups]
+dev = [
+  "build>=1.2,<2",
+  "codespell>=2.4,<3",
+  "mypy>=1.15,<2",
+  "pre-commit>=4.2,<5",
+  "pyarrow-stubs==19.4",
+  "pytest>=9,<10",
+  "pytest-cov>=6,<8",
+  "pytest-asyncio>=0.25,<2",
+  "ruff>=0.11,<1",
+  "twine>=6.1,<7",
+  "types-PyMySQL>=1.1,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/daft_doris"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/docker", "/scripts", "/docs", "/README.md", "/LICENSE", "/NOTICE", "/pyproject.toml"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers -ra"
+testpaths = ["tests/unit", "tests/contract", "tests/integration"]
+markers = [
+  "contract: public Daft connector contract tests",
+  "integration: requires a real Doris service",
+  "ray: requires the Daft Ray extra",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+# Read transports are validated against a real Doris service; the unit gate covers
+# the shared contracts and the write path that can be exercised without a service.
+source = ["daft_doris._common", "daft_doris.write"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["A", "B", "E", "F", "I", "N", "RUF", "S", "SIM", "UP"]
+ignore = ["S101", "S301", "S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/daft_doris/doris/api.py" = ["A002"]
+"src/daft_doris/doris/discovery.py" = ["S310"]
+"src/daft_doris/doris/sql.py" = ["S608"]
+"src/daft_doris/write/api.py" = ["A002"]
+"src/daft_doris/write/options.py" = ["A002"]
+"src/daft_doris/write/serialization.py" = ["A002"]
+"src/daft_doris/write/stream_load.py" = ["S310"]
+"scripts/wait_for_service.py" = ["S310"]
+"tests/**/*.py" = ["S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "tests/unit", "tests/contract"]
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+warn_return_any = true
+warn_unused_ignores = true

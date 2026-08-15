@@ -1,0 +1,72 @@
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: daft-doris-it
+
+services:
+  fe:
+    build:
+      context: .
+      dockerfile: fe.Dockerfile
+    hostname: daft-olap-doris-fe
+    networks:
+      doris:
+        ipv4_address: ${DORIS_FE_CONTAINER_IP:-10.250.128.2}
+    ports:
+      - "127.0.0.1:${DORIS_HTTP_PORT:-28030}:8030"
+      - "127.0.0.1:${DORIS_MYSQL_PORT:-29030}:9030"
+      - "127.0.0.1:${DORIS_FLIGHT_PORT:-28070}:8070"
+    environment:
+      FE_SERVERS: fe1:${DORIS_FE_CONTAINER_IP:-10.250.128.2}:9010
+      FE_ID: "1"
+    volumes:
+      - doris-fe-data:/opt/apache-doris/fe/doris-meta
+    mem_limit: 3g
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+
+  be:
+    build:
+      context: .
+      dockerfile: be.Dockerfile
+    hostname: daft-olap-doris-be
+    depends_on:
+      - fe
+    networks:
+      doris:
+        ipv4_address: ${DORIS_BE_CONTAINER_IP:-10.250.128.3}
+    ports:
+      - "127.0.0.1:${DORIS_BE_FLIGHT_PORT:-28050}:8050"
+      - "127.0.0.1:${DORIS_BE_HTTP_PORT:-28040}:8040"
+    environment:
+      FE_SERVERS: fe1:${DORIS_FE_CONTAINER_IP:-10.250.128.2}:9010
+      BE_ADDR: ${DORIS_BE_CONTAINER_IP:-10.250.128.3}:9050
+    volumes:
+      - doris-be-data:/opt/apache-doris/be/storage
+    # Doris 4.0.6 idles near 2 GiB; four concurrent Flight tasks require headroom.
+    mem_limit: 4g
+    ulimits:
+      nofile:
+        soft: 200000
+        hard: 200000
+
+networks:
+  doris:
+    ipam:
+      config:
+        - subnet: ${DORIS_CONTAINER_SUBNET:-10.250.128.0/24}
+
+volumes:
+  doris-fe-data:
+  doris-be-data:
