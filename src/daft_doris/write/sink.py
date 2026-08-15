@@ -20,6 +20,7 @@ from daft.schema import Schema
 
 from daft_doris._common.contracts import ResourceLimits
 from daft_doris._common.errors import ConfigurationError
+from daft_doris._compat import infer_runner_type
 from daft_doris.write.connection import DorisConnection, DorisTable
 from daft_doris.write.metadata import (
     DorisTableMetadata,
@@ -72,6 +73,7 @@ class DorisDataSink(DataSink[_WriteSummary]):
 
     def start(self) -> None:
         """Validate table prerequisites before the first data request."""
+        self._ensure_native_runner()
         limits = ResourceLimits(
             batch_rows=self._options.batch_rows,
             batch_bytes=self._options.batch_bytes,
@@ -83,10 +85,33 @@ class DorisDataSink(DataSink[_WriteSummary]):
         )
         self._metadata = discover_table_metadata(self._connection, self._table, limits)
 
+    @staticmethod
+    def _ensure_native_runner() -> None:
+        """Reject distributed execution before any metadata or load side effect.
+
+        Daft's Ray dispatcher may requeue a task after a worker becomes
+        unavailable.  The public DataSink contract does not provide a stable
+        operation identity or a sink-level retry policy, so a Stream Load
+        request could be accepted by Doris and then executed again with a new
+        label.  Until the connector can bind a logical batch to an
+        authoritative Doris status, native execution is the only supported
+        writer runner.  Keeping this check in ``start`` makes the failure
+        happen before the first metadata or data request.
+        """
+        runner_name = infer_runner_type()
+        if runner_name != "native":
+            raise ConfigurationError(
+                "Doris Stream Load writes require Daft's native runner; "
+                "Ray writes are unsupported because worker retry may duplicate a committed batch"
+            )
+
     def write(
         self, micropartitions: Iterator[MicroPartition]
     ) -> Iterator[WriteResult[_WriteSummary]]:
         """Serialize and load each micropartition with a request-scoped client."""
+        if self._metadata is None:
+            raise ConfigurationError("Doris DataSink start() must complete before write()")
+        metadata = self._metadata
         client = StreamLoadClient(self._connection, self._table, self._options)
         for micropartition in micropartitions:
             arrow_table = micropartition.to_arrow()
@@ -96,14 +121,13 @@ class DorisDataSink(DataSink[_WriteSummary]):
                 raise ConfigurationError(
                     "Doris DataSink received inconsistent micropartition schemas"
                 )
-            if self._metadata is not None:
-                prepared = validate_write_table(
-                    self._metadata,
-                    operation=self._options.operation,
-                    arrow_table=arrow_table,
-                )
-                if prepared is not None:
-                    arrow_table = prepared
+            prepared = validate_write_table(
+                metadata,
+                operation=self._options.operation,
+                arrow_table=arrow_table,
+            )
+            if prepared is not None:
+                arrow_table = prepared
 
             for batch in iter_serialized_batches(
                 arrow_table,

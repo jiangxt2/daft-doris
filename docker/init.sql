@@ -155,6 +155,21 @@ PROPERTIES (
     "enable_unique_key_merge_on_write" = "true"
 );
 
+DROP TABLE IF EXISTS analytics.partial_json_events;
+
+CREATE TABLE analytics.partial_json_events
+(
+    id BIGINT NOT NULL,
+    document JSON NULL,
+    payload STRING NULL
+)
+UNIQUE KEY(id)
+DISTRIBUTED BY HASH(id) BUCKETS 1
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
 DROP TABLE IF EXISTS analytics.aggregate_events;
 
 CREATE TABLE analytics.aggregate_events
@@ -167,7 +182,43 @@ AGGREGATE KEY(id)
 DISTRIBUTED BY HASH(id) BUCKETS 1
 PROPERTIES ("replication_num" = "1");
 
+DROP TABLE IF EXISTS analytics.`special identifiers`;
+
+CREATE TABLE analytics.`special identifiers`
+(
+    `id,part` BIGINT NOT NULL,
+    `value (x)` VARCHAR(32) NULL,
+    `名称` STRING NULL,
+    `tick column` STRING NULL
+)
+UNIQUE KEY(`id,part`)
+DISTRIBUTED BY HASH(`id,part`) BUCKETS 1
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
+DROP TABLE IF EXISTS analytics.`escaped identifiers`;
+
+CREATE TABLE analytics.`escaped identifiers`
+(
+    id BIGINT NOT NULL,
+    `tick``column` STRING NULL
+)
+UNIQUE KEY(id)
+DISTRIBUTED BY HASH(id) BUCKETS 1
+PROPERTIES (
+    "replication_num" = "1",
+    "enable_unique_key_merge_on_write" = "true"
+);
+
 GRANT SELECT_PRIV, LOAD_PRIV ON analytics.write_events TO 'daft_reader';
 GRANT SELECT_PRIV, LOAD_PRIV ON analytics.unique_events TO 'daft_reader';
 GRANT SELECT_PRIV, LOAD_PRIV ON analytics.partial_events TO 'daft_reader';
+GRANT SELECT_PRIV, LOAD_PRIV ON analytics.partial_json_events TO 'daft_reader';
 GRANT SELECT_PRIV, LOAD_PRIV ON analytics.aggregate_events TO 'daft_reader';
+GRANT SELECT_PRIV, LOAD_PRIV ON analytics.`special identifiers` TO 'daft_reader';
+GRANT SELECT_PRIV, LOAD_PRIV ON analytics.`escaped identifiers` TO 'daft_reader';
+
+CREATE USER IF NOT EXISTS 'daft_metadata_only' IDENTIFIED BY 'metadata-only-password';
+GRANT SELECT_PRIV ON analytics.write_events TO 'daft_metadata_only';

@@ -10,7 +10,7 @@ This project is in alpha development. It keeps the Doris read path explicit betw
 uv add "daft-doris[doris]"
 ```
 
-Install `daft-doris[doris-flight]` for Doris Flight reads or `daft-doris[ray]` for the supported Daft Ray profile.
+Install `daft-doris[doris-flight]` for Doris Flight reads or `daft-doris[ray]` for the supported Daft Ray read profile. The first-release Doris writer requires Daft's native runner and rejects Ray before metadata discovery.
 
 ## Write example
 
@@ -36,7 +36,7 @@ result = write_doris(
 
 Write planning uses the Doris MySQL authority for `SHOW CREATE TABLE` and `DESCRIBE`, so the write user needs the corresponding metadata privileges in addition to the table load privilege. FE-to-BE redirects require an explicit host and port allowlist; the connector never follows an arbitrary redirect.
 
-The writer does not automatically retry a request whose commit state is unknown, and it does not claim whole-DataFrame atomicity or exactly-once delivery under executor retry.
+The writer does not automatically retry a request whose commit state is unknown, and it does not claim whole-DataFrame atomicity or exactly-once delivery under executor retry. A request-body failure before transmission is reported separately from an ambiguous post-transmission, response-loss, or malformed-response failure. Custom CA and mTLS are not part of the first-release TLS profile.
 
 ## Read example
 

@@ -15,4 +15,6 @@ The write path is:
 MicroPartition -> Arrow table -> bounded Parquet/JSON payload -> Stream Load PUT -> sanitized WriteResult -> finalize statistics
 ```
 
+`DorisDataSink.start()` is also the runner safety gate. It rejects Daft's Ray runner before MySQL metadata discovery because the public DataSink API does not expose a stable side-effect identity or sink-level retry policy. This keeps a distributed worker failure from silently turning into a second Stream Load label; adding Ray write support later requires a separate destination-authoritative identity and recovery design.
+
 The package deliberately does not monkey-patch `daft.DataFrame`.

@@ -28,6 +28,15 @@ _PERMISSION_VENDOR_CODES = frozenset(
 _NOT_FOUND_VENDOR_CODES = frozenset({1049, 1051, 1109, 1146})
 _GENERIC_VENDOR_ERROR = 1105
 _NOT_FOUND_MESSAGE_MARKERS = ("unknown table", "unknown database", "does not exist")
+_GENERIC_PERMISSION_MESSAGE_MARKERS = (
+    "access denied",
+    "command denied",
+    "permission denied",
+    "insufficient privilege",
+    "privilege denied",
+    "privileges required",
+    "requires privilege",
+)
 _ADBC_NOT_FOUND = 3
 _ADBC_UNAUTHENTICATED = 13
 _ADBC_UNAUTHORIZED = 14
@@ -64,6 +73,22 @@ def _generic_error_is_not_found(error: BaseException, vendor_code: int | None) -
     return any(marker in normalized for marker in _NOT_FOUND_MESSAGE_MARKERS)
 
 
+def is_doris_permission_message(detail: str) -> bool:
+    """Match bounded authorization phrases without treating every privilege mention as denial."""
+    normalized = detail.casefold()
+    return any(marker in normalized for marker in _GENERIC_PERMISSION_MESSAGE_MARKERS)
+
+
+def _generic_error_is_permission(error: BaseException, vendor_code: int | None) -> bool:
+    """Classify Doris' generic 1105 permission messages without retaining text."""
+    if vendor_code != _GENERIC_VENDOR_ERROR or len(error.args) <= _ERROR_DETAIL_INDEX:
+        return False
+    detail = error.args[_ERROR_DETAIL_INDEX]
+    if not isinstance(detail, str):
+        return False
+    return is_doris_permission_message(detail)
+
+
 def _sqlstate(error: BaseException) -> str | None:
     value = getattr(error, "sqlstate", None)
     if isinstance(value, bytes):
@@ -85,7 +110,11 @@ def translate_doris_error(error: BaseException, *, operation: str) -> DaftOlapEr
         or sqlstate == "28000"
     ):
         return AuthenticationError(f"Doris authentication failed during {operation}")
-    if vendor_code in _PERMISSION_VENDOR_CODES or status_code == _ADBC_UNAUTHORIZED:
+    if (
+        vendor_code in _PERMISSION_VENDOR_CODES
+        or status_code == _ADBC_UNAUTHORIZED
+        or _generic_error_is_permission(error, vendor_code)
+    ):
         return DatabasePermissionError(f"Doris denied access during {operation}")
     if (
         vendor_code in _NOT_FOUND_VENDOR_CODES

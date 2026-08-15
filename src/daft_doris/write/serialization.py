@@ -46,7 +46,11 @@ def _json_value(value: Any) -> Any:
             raise ConfigurationError("non-finite JSON decimals are unsupported")
         return format(value, "f")
     if isinstance(value, bytes):
-        return base64.b64encode(value).decode("ascii")
+        # Doris parses a JSON column's string source as JSON text during
+        # Stream Load. Encode the Base64 text as a JSON string literal so
+        # strict mode receives a valid JSON scalar rather than an unquoted
+        # token.
+        return json.dumps(base64.b64encode(value).decode("ascii"), ensure_ascii=False)
     if isinstance(value, list):
         return [_json_value(item) for item in value]
     if isinstance(value, dict):

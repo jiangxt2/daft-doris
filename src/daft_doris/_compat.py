@@ -154,6 +154,28 @@ class _PredicateCompiler(ExpressionVisitor[Predicate | Value | list[Literal]]):
 _PREDICATE_COMPILER = _PredicateCompiler()
 
 
+def infer_runner_type() -> str:
+    """Resolve Daft's runner type through the compatibility boundary.
+
+    The writer must reject Ray before it performs metadata or Stream Load I/O. Keep
+    the Daft runner capability lookup here so a Daft API change is handled in one
+    adapter rather than leaking into the sink implementation.
+    """
+    try:
+        daft_module = import_module("daft")
+    except ImportError:
+        raise CompatibilityError(
+            "the active Daft release does not expose the runner type contract"
+        ) from None
+    getter = getattr(daft_module, "get_or_infer_runner_type", None)
+    if not callable(getter):
+        raise CompatibilityError("the active Daft release does not expose the runner type contract")
+    runner_type = getter()
+    if not isinstance(runner_type, str) or runner_type not in {"native", "ray"}:
+        raise CompatibilityError("the active Daft release returned an unknown runner type")
+    return runner_type
+
+
 def compile_filter(expression: Expression | None) -> Predicate | None:
     """Compile a complete Daft filter, returning no pushdown for any unsupported subtree."""
     if expression is None:

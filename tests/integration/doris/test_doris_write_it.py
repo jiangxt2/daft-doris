@@ -68,7 +68,9 @@ def test_duplicate_key_stream_load_returns_sanitized_statistics() -> None:
     )
     assert result.to_pydict()["status"] == ["success"]
     assert result.to_pydict()["attempted_rows"] == [2]
-    assert _query("SELECT id, score FROM analytics.write_events ORDER BY id")[-2:] == [
+    assert _query(
+        "SELECT id, score FROM analytics.write_events WHERE id IN (1, 2) ORDER BY id"
+    ) == [
         (1, 10),
         (2, 20),
     ]
@@ -190,14 +192,14 @@ def test_incompatible_write_fails_before_stream_load_request() -> None:
 
 
 @pytest.mark.ray
-def test_stream_load_writer_runs_with_daft_ray() -> None:
+def test_stream_load_writer_rejects_daft_ray_before_upload() -> None:
     script = textwrap.dedent(
         """
         import os
         import daft
         import ray
         from ray.cluster_utils import Cluster
-        from daft_doris import DorisConnection, DorisTable, write_doris
+        from daft_doris import ConfigurationError, DorisConnection, DorisTable, write_doris
 
         cluster = Cluster()
         cluster.add_node(num_cpus=0, include_dashboard=False)
@@ -205,30 +207,34 @@ def test_stream_load_writer_runs_with_daft_ray() -> None:
         ray.init(address=cluster.address)
         try:
             daft.set_runner_ray(noop_if_initialized=True)
-            result = write_doris(
-                daft.from_pydict(
-                    {
-                        "id": [103, 104],
-                        "kind": ["ray-a", "ray-b"],
-                        "score": [3, 4],
-                        "payload": ["ray-a", "ray-b"],
-                    }
-                ),
-                connection=DorisConnection(
-                    host="127.0.0.1",
-                    http_port=int(os.environ.get("DORIS_HTTP_PORT", "28030")),
-                    mysql_port=int(os.environ.get("DORIS_MYSQL_PORT", "29030")),
-                    username="root",
-                    password=os.environ.get("DORIS_PASSWORD", ""),
-                    redirect_hosts=(os.environ.get("DORIS_BE_HOST", "127.0.0.1"),),
-                    redirect_ports=(int(os.environ.get("DORIS_BE_HTTP_PORT", "28040")),),
-                    redirect_policy="public",
-                    request_timeout_seconds=30.0,
-                ),
-                table=DorisTable("analytics", "write_events"),
-                label_prefix="ray_write_it",
-            ).to_pydict()
-            assert result["attempted_rows"] == [2], result
+            try:
+                write_doris(
+                    daft.from_pydict(
+                        {
+                            "id": [103, 104],
+                            "kind": ["ray-a", "ray-b"],
+                            "score": [3, 4],
+                            "payload": ["ray-a", "ray-b"],
+                        }
+                    ),
+                    connection=DorisConnection(
+                        host="127.0.0.1",
+                        http_port=int(os.environ.get("DORIS_HTTP_PORT", "28030")),
+                        mysql_port=int(os.environ.get("DORIS_MYSQL_PORT", "29030")),
+                        username="root",
+                        password=os.environ.get("DORIS_PASSWORD", ""),
+                        redirect_hosts=(os.environ.get("DORIS_BE_HOST", "127.0.0.1"),),
+                        redirect_ports=(int(os.environ.get("DORIS_BE_HTTP_PORT", "28040")),),
+                        redirect_policy="public",
+                        request_timeout_seconds=30.0,
+                    ),
+                    table=DorisTable("analytics", "write_events"),
+                    label_prefix="ray_write_it",
+                )
+            except ConfigurationError as error:
+                assert "native runner" in str(error)
+            else:
+                raise AssertionError("Ray Stream Load writes must fail before metadata discovery")
         finally:
             ray.shutdown()
             cluster.shutdown()
@@ -255,7 +261,4 @@ def test_stream_load_writer_runs_with_daft_ray() -> None:
         check=False,
     )
     assert process.returncode == 0, process.stdout + process.stderr
-    assert _query("SELECT id, score FROM analytics.write_events WHERE id IN (103, 104)") == [
-        (103, 3),
-        (104, 4),
-    ]
+    assert _query("SELECT id, score FROM analytics.write_events WHERE id IN (103, 104)") == []

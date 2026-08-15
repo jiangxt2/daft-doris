@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+import base64
+import http.client
+import io
+import json
 import pickle
 import sys
 import urllib.error
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
+from email.message import Message
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 
@@ -21,11 +26,15 @@ from daft.io.sink import WriteResult
 
 from daft_doris._common.contracts import ResourceLimits
 from daft_doris._common.errors import (
+    CompatibilityError,
     ConfigurationError,
     DatabaseObjectNotFoundError,
     DatabasePermissionError,
+    DiscoveryError,
 )
 from daft_doris._common.redaction import SecretRef
+from daft_doris._compat import infer_runner_type
+from daft_doris.doris.errors import translate_doris_error
 from daft_doris.write.connection import DorisConnection, DorisTable
 from daft_doris.write.errors import (
     DorisAmbiguousWriteError,
@@ -154,6 +163,13 @@ def test_serialization_preserves_typed_full_rows_and_json_values() -> None:
     assert '"event_date":"2026-01-01"' in json_payload
     assert '"event_ts":"2026-01-01T01:02:03"' in json_payload
 
+    binary_payload = serialize_json(
+        pa.table({"document": pa.array([b"binary-value"], type=pa.binary())})
+    ).decode()
+    assert json.loads(binary_payload) == {
+        "document": json.dumps(base64.b64encode(b"binary-value").decode("ascii"))
+    }
+
 
 def test_serialized_batches_split_by_rows_and_bytes_without_dropping_rows() -> None:
     table = pa.table({"id": pa.array(range(5), type=pa.int64()), "payload": ["x"] * 5})
@@ -177,6 +193,60 @@ def test_parse_create_table_and_validate_operation_prerequisites() -> None:
         validate_write_table(
             metadata, operation="partial_update", arrow_schema=pa.schema([("value", pa.int64())])
         )
+
+
+def test_parse_create_table_preserves_special_and_escaped_key_identifiers() -> None:
+    metadata = parse_create_table(
+        "CREATE TABLE `special identifiers` ("
+        "`id,part` BIGINT, `value (x)` STRING, `tick``column` STRING"
+        ") UNIQUE KEY(`id,part`) "
+        'PROPERTIES ("enable_unique_key_merge_on_write" = "true")'
+    )
+
+    assert metadata.model == "UNIQUE"
+    assert metadata.key_columns == ("id,part",)
+    assert metadata.merge_on_write
+
+    quoted_model_text = parse_create_table(
+        "CREATE TABLE `DUPLICATE KEY` (`id` BIGINT) DUPLICATE KEY(`id`)"
+    )
+    assert quoted_model_text.model == "DUPLICATE"
+    assert quoted_model_text.key_columns == ("id",)
+
+
+def test_parse_create_table_ignores_model_and_mow_text_inside_literals() -> None:
+    metadata = parse_create_table(
+        "CREATE TABLE t (`id` BIGINT COMMENT "
+        '\'UNIQUE KEY (`wrong`) "enable_unique_key_merge_on_write" = "true"\' '
+        ') DUPLICATE KEY (`id`) PROPERTIES ("replication_num" = "1")'
+    )
+
+    assert metadata.model == "DUPLICATE"
+    assert metadata.key_columns == ("id",)
+    assert not metadata.merge_on_write
+
+
+def test_parse_create_table_reads_mow_only_from_properties_clause() -> None:
+    metadata = parse_create_table(
+        "CREATE TABLE t (`id` BIGINT) UNIQUE KEY (`id`) "
+        'PROPERTIES ("enable_unique_key_merge_on_write" = "true")'
+    )
+
+    assert metadata.merge_on_write
+
+
+@pytest.mark.parametrize(
+    "create_sql",
+    [
+        "CREATE TABLE t (id INT) UNIQUE KEY(id",
+        "CREATE TABLE t (id INT) UNIQUE KEY(`id)",
+        "CREATE TABLE t (id INT) UNIQUE KEY(`id` extra)",
+        "CREATE TABLE t (id INT) UNIQUE KEY(id,)",
+    ],
+)
+def test_parse_create_table_rejects_malformed_key_identifier_syntax(create_sql: str) -> None:
+    with pytest.raises(DorisMetadataError, match="key"):
+        parse_create_table(create_sql)
 
 
 @pytest.mark.parametrize(
@@ -297,6 +367,33 @@ def test_discover_table_metadata_preserves_types_and_classifies_database_errors(
         raise RuntimeError("Access denied for metadata")
 
     monkeypatch.setitem(sys.modules, "pymysql", SimpleNamespace(connect=permission_connect))
+    with pytest.raises(DatabasePermissionError):
+        discover_table_metadata(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            ResourceLimits(target_tasks=1, max_tasks=1),
+        )
+
+    def unrelated_privilege_connect(**kwargs: object) -> None:
+        raise RuntimeError("privilege cache refresh failed")
+
+    monkeypatch.setitem(
+        sys.modules, "pymysql", SimpleNamespace(connect=unrelated_privilege_connect)
+    )
+    with pytest.raises(DiscoveryError):
+        discover_table_metadata(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            ResourceLimits(target_tasks=1, max_tasks=1),
+        )
+
+    def command_denied_connect(**kwargs: object) -> None:
+        raise RuntimeError(
+            1105,
+            "errCode = 2, detailMessage = SHOW CREATE TABLE command denied to user",
+        )
+
+    monkeypatch.setitem(sys.modules, "pymysql", SimpleNamespace(connect=command_denied_connect))
     with pytest.raises(DatabasePermissionError):
         discover_table_metadata(
             DorisConnection(host="fe.example"),
@@ -541,8 +638,125 @@ def test_stream_load_rejects_invalid_response_without_leaking_payload() -> None:
 
     with pytest.raises(DorisWriteError, match="invalid response"):
         StreamLoadClient._parse_response(b"[]", "label", 1)
-    with pytest.raises(DorisWriteError, match="HTTP 400"):
-        StreamLoadClient._parse_response(b'{"Status":"Fail"}', "label", 1, http_error=400)
+    with pytest.raises(DorisWriteError, match="HTTP 400") as error:
+        StreamLoadClient._parse_response(
+            b'{"Status":"Fail","ErrorURL":"https://secret.invalid/error",'
+            b'"Message":"password-secret payload-secret"}',
+            "label",
+            1,
+            http_error=400,
+        )
+    assert "secret.invalid" not in str(error.value)
+    assert "password-secret" not in str(error.value)
+    assert "payload-secret" not in str(error.value)
+
+
+def test_stream_load_malformed_http_error_is_public_and_ambiguous_after_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Opener:
+        def open(self, request: object, **kwargs: object) -> object:
+            del kwargs
+            transmission = cast(Any, request).transmission
+            transmission.header_sent = True
+            transmission.body_started = True
+            raise urllib.error.HTTPError(
+                cast(Any, request).full_url,
+                500,
+                "server error",
+                Message(),
+                io.BytesIO(b"not-json"),
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: Opener())
+    with pytest.raises(DorisAmbiguousWriteError, match="status is unknown") as error:
+        StreamLoadClient(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            DorisWriteOptions(),
+        ).load(b"payload", rows=1, columns=("id",))
+    assert type(error.value).__name__ == "DorisAmbiguousWriteError"
+
+
+def test_stream_load_malformed_http_4xx_is_known_failure_after_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Opener:
+        def open(self, request: object, **kwargs: object) -> object:
+            del kwargs
+            transmission = cast(Any, request).transmission
+            transmission.header_sent = True
+            transmission.body_started = True
+            raise urllib.error.HTTPError(
+                cast(Any, request).full_url,
+                400,
+                "bad request",
+                Message(),
+                io.BytesIO(b"not-json-secret"),
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: Opener())
+    with pytest.raises(DorisWriteError, match="HTTP 400") as error:
+        StreamLoadClient(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            DorisWriteOptions(),
+        ).load(b"payload", rows=1, columns=("id",))
+    assert not isinstance(error.value, DorisAmbiguousWriteError)
+    assert "not-json-secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("status", [400, 500])
+def test_stream_load_oversized_http_error_uses_status_classification(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    monkeypatch.setattr("daft_doris.write.stream_load._MAX_RESPONSE_BYTES", 8)
+
+    class Opener:
+        def open(self, request: object, **kwargs: object) -> object:
+            del kwargs
+            transmission = cast(Any, request).transmission
+            transmission.header_sent = True
+            transmission.body_started = True
+            raise urllib.error.HTTPError(
+                cast(Any, request).full_url,
+                status,
+                "error",
+                Message(),
+                io.BytesIO(b"too-large"),
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: Opener())
+    expected_error = DorisAmbiguousWriteError if status == 500 else DorisWriteError
+    with pytest.raises(expected_error) as error:
+        StreamLoadClient(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            DorisWriteOptions(),
+        ).load(b"payload", rows=1, columns=("id",))
+    if status == 400:
+        assert not isinstance(error.value, DorisAmbiguousWriteError)
+        assert "HTTP 400" in str(error.value)
+    else:
+        assert "status is unknown" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "SHOW CREATE TABLE command denied to user",
+        "Access denied; insufficient privilege for operation",
+        "operation requires privileges",
+    ],
+)
+def test_generic_doris_1105_permission_markers_are_bounded(detail: str) -> None:
+    translated = translate_doris_error(RuntimeError(1105, detail), operation="metadata")
+    assert isinstance(translated, DatabasePermissionError)
+
+    unrelated = translate_doris_error(
+        RuntimeError(1105, "privilege cache refresh failed"), operation="metadata"
+    )
+    assert unrelated is None
 
 
 def test_stream_load_headers_redact_credentials_and_set_partial_update_flags() -> None:
@@ -554,9 +768,21 @@ def test_stream_load_headers_redact_credentials_and_set_partial_update_flags() -
     headers = client._headers("label", ("id", "kind"))
     assert headers["format"] == "json"
     assert headers["partial_columns"] == "true"
-    assert headers["columns"] == "id,kind"
+    assert headers["columns"] == "`id`,`kind`"
     assert headers["redirect-policy"] == "public"
     assert "password-secret" not in repr(headers)
+
+
+def test_stream_load_headers_quote_special_partial_update_columns() -> None:
+    client = StreamLoadClient(
+        DorisConnection(host="fe.example"),
+        DorisTable("analytics", "special identifiers"),
+        DorisWriteOptions(operation="partial_update"),
+    )
+
+    headers = client._headers("label", ("id,part", "value (x)", "tick`column"))
+
+    assert headers["columns"] == "`id,part`,`value (x)`,`tick``column`"
 
 
 def test_stream_load_redirect_preserves_put_body_and_authentication() -> None:
@@ -605,11 +831,12 @@ def test_datasink_finalize_preserves_publish_timeout_and_mixed_status() -> None:
     ]
 
 
-def test_stream_load_network_failure_is_ambiguous_and_not_replayed(
+def test_stream_load_network_failure_before_body_is_not_ambiguous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FailingOpener:
-        def open(self, *args: object, **kwargs: object) -> object:
+        def open(self, request: object, **kwargs: object) -> object:
+            del request, kwargs
             raise urllib.error.URLError("connection interrupted")
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: FailingOpener())
@@ -618,8 +845,152 @@ def test_stream_load_network_failure_is_ambiguous_and_not_replayed(
         DorisTable("analytics", "events"),
         DorisWriteOptions(),
     )
-    with pytest.raises(DorisAmbiguousWriteError, match="status is unknown"):
+    with pytest.raises(DorisWriteError, match="before request body transmission"):
         client.load(b"payload", rows=1, columns=("id",))
+
+
+def test_stream_load_network_failure_after_body_is_ambiguous_and_redacted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingOpener:
+        def open(self, request: object, **kwargs: object) -> object:
+            del kwargs
+            transmission = cast(Any, request).transmission
+            transmission.header_sent = True
+            transmission.body_started = True
+            raise urllib.error.URLError("password-secret payload-secret")
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: FailingOpener())
+    client = StreamLoadClient(
+        DorisConnection(host="fe.example", password="password-secret"),
+        DorisTable("analytics", "events"),
+        DorisWriteOptions(),
+    )
+    with pytest.raises(DorisAmbiguousWriteError, match="status is unknown") as error:
+        client.load(b"payload-secret", rows=1, columns=("id",))
+    assert "password-secret" not in str(error.value)
+    assert "payload-secret" not in str(error.value)
+
+
+def test_stream_load_response_resource_is_closed_without_masking_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        closed = False
+
+        def read(self, limit: int) -> bytes:
+            assert limit > 0
+            return (
+                b'{"Status":"Success","NumberLoadedRows":1,'
+                b'"NumberFilteredRows":0,"NumberTotalRows":1}'
+            )
+
+        def close(self) -> None:
+            self.closed = True
+            raise OSError("close-secret")
+
+    response = Response()
+
+    class Opener:
+        def open(self, request: object, **kwargs: object) -> Response:
+            del request, kwargs
+            return response
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: Opener())
+    result = StreamLoadClient(
+        DorisConnection(host="fe.example"),
+        DorisTable("analytics", "events"),
+        DorisWriteOptions(),
+    ).load(b"payload", rows=1, columns=("id",))
+    assert result.status == "Success"
+    assert response.closed
+
+
+def test_stream_load_response_loss_is_ambiguous_and_closes_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        closed = False
+
+        def read(self, limit: int) -> bytes:
+            del limit
+            raise http.client.IncompleteRead(b'{"Status":"Success"}')
+
+        def close(self) -> None:
+            self.closed = True
+
+    response = Response()
+
+    class Opener:
+        def open(self, request: object, **kwargs: object) -> Response:
+            transmission = cast(Any, request).transmission
+            transmission.header_sent = True
+            transmission.body_started = True
+            del kwargs
+            return response
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: Opener())
+    with pytest.raises(DorisAmbiguousWriteError, match="status is unknown"):
+        StreamLoadClient(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            DorisWriteOptions(),
+        ).load(b"payload", rows=1, columns=("id",))
+    assert response.closed
+
+
+def test_stream_load_malformed_response_after_body_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def read(self, limit: int) -> bytes:
+            del limit
+            return b"{"
+
+        def close(self) -> None:
+            return None
+
+    class Opener:
+        def open(self, request: object, **kwargs: object) -> Response:
+            transmission = cast(Any, request).transmission
+            transmission.header_sent = True
+            transmission.body_started = True
+            del kwargs
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *handlers: Opener())
+    with pytest.raises(DorisAmbiguousWriteError, match="status is unknown"):
+        StreamLoadClient(
+            DorisConnection(host="fe.example"),
+            DorisTable("analytics", "events"),
+            DorisWriteOptions(),
+        ).load(b"payload", rows=1, columns=("id",))
+
+
+def test_infer_runner_type_fails_closed_when_contract_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("daft_doris._compat.import_module", lambda name: SimpleNamespace())
+    with pytest.raises(CompatibilityError, match="runner type contract"):
+        infer_runner_type()
+
+
+def test_datasink_rejects_ray_before_metadata_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("daft_doris.write.sink.infer_runner_type", lambda: "ray")
+    monkeypatch.setattr(
+        "daft_doris.write.sink.discover_table_metadata",
+        lambda *args, **kwargs: pytest.fail("metadata discovery must not run under Ray"),
+    )
+    sink = DorisDataSink(DorisConnection(host="fe.example"), DorisTable("analytics", "events"))
+    with pytest.raises(ConfigurationError, match="native runner"):
+        sink.start()
+
+
+def test_datasink_write_requires_completed_start() -> None:
+    sink = DorisDataSink(DorisConnection(host="fe.example"), DorisTable("analytics", "events"))
+
+    with pytest.raises(ConfigurationError, match=r"start\(\) must complete"):
+        next(sink.write(iter(())))
 
 
 def test_doris_datasink_uses_public_daft_write_sink_lifecycle(
