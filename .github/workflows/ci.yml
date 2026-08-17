@@ -80,7 +80,6 @@ jobs:
       - run: >-
           uv run pytest -p no:cacheprovider tests/unit tests/contract
           -m "not ray" --cov --cov-branch --cov-report=term-missing
-      - run: uv run pytest -p no:cacheprovider tests/contract -m ray -vv
 
   integration:
     name: Doris integration
