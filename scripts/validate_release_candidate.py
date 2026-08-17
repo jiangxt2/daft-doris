@@ -100,7 +100,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if not _file_exists(candidate_sha, release_notes):
         raise SystemExit(f"release candidate is missing {release_notes}")
     if options.mode == "tag":
-        if options.tag != expected_tag or options.event_sha != candidate_sha:
+        event_commit_sha = _git("rev-parse", f"{options.event_sha}^{{commit}}")
+        if options.tag != expected_tag or event_commit_sha != candidate_sha:
             raise SystemExit("release tag identity does not match the candidate commit and version")
         if (
             options.event_created.lower() != "true"

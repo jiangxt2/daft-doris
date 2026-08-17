@@ -25,6 +25,16 @@ on:
         description: Exact package version expected at the candidate commit
         required: true
         type: string
+      formal_publish:
+        description: Publish using an existing immutable release tag after recovery approval
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: Existing immutable release tag for formal recovery, for example v1.0
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -62,10 +72,10 @@ jobs:
         env:
           CANDIDATE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.ref }}
           EXPECTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_version || '' }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && 'dry-run' || 'tag' }}
-          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
-          EVENT_SHA: ${{ github.event_name == 'push' && github.event.after || '' }}
-          EVENT_CREATED: ${{ github.event_name == 'push' && github.event.created || false }}
+          MODE: ${{ github.event_name == 'push' && 'tag' || inputs.formal_publish == true && 'tag' || 'dry-run' }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.formal_publish == true && inputs.release_tag || '' }}
+          EVENT_SHA: ${{ github.event_name == 'push' && github.event.after || inputs.formal_publish == true && inputs.candidate_sha || '' }}
+          EVENT_CREATED: ${{ github.event_name == 'push' || inputs.formal_publish == true }}
           EVENT_DELETED: ${{ github.event_name == 'push' && github.event.deleted || false }}
           EVENT_FORCED: ${{ github.event_name == 'push' && github.event.forced || false }}
         run: >-
@@ -244,8 +254,10 @@ jobs:
     name: Publish formal artifact to TestPyPI
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
+      (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.formal_publish == true && github.ref == 'refs/heads/master')
+      ) &&
       needs.candidate.result == 'success' &&
       needs.gates.result == 'success' &&
       needs.build.result == 'success' &&
@@ -288,8 +300,10 @@ jobs:
     name: TestPyPI smoke (${{ matrix.profile }})
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
+      (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.formal_publish == true && github.ref == 'refs/heads/master')
+      ) &&
       needs.candidate.result == 'success' &&
       needs.testpypi-publish.result == 'success' &&
       needs.candidate.outputs.mode == 'tag'
@@ -328,8 +342,10 @@ jobs:
     name: Publish to PyPI
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
+      (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.formal_publish == true && github.ref == 'refs/heads/master')
+      ) &&
       needs.candidate.result == 'success' &&
       needs.gates.result == 'success' &&
       needs.build.result == 'success' &&
@@ -373,8 +389,10 @@ jobs:
     name: Create GitHub Release
     if: >-
       always() &&
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v') &&
+      (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.formal_publish == true && github.ref == 'refs/heads/master')
+      ) &&
       needs.candidate.result == 'success' &&
       needs.gates.result == 'success' &&
       needs.build.result == 'success' &&
