@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daft-doris"
-version = "0.1.0a1"
+version = "1.0"
 description = "Independent Daft read and Stream Load connector for Apache Doris"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
