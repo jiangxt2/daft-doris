@@ -1,0 +1,69 @@
+name: Feature Request
+description: Suggest an improvement to daft-doris.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Please search existing issues before proposing a feature. Remove credentials and private data from examples.
+
+  - type: textarea
+    id: related-problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: Describe the problem or use case. Include links to related issues when available.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: Describe the behavior you would like to see and how it would help your use case.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Describe alternatives you've considered
+      description: Describe any workarounds or alternative solutions.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component(s)
+      multiple: true
+      options:
+        - Read (MySQL)
+        - Read (Flight SQL)
+        - Write (Stream Load)
+        - Predicate pushdown
+        - Schema and types
+        - Daft compatibility
+        - Ray execution
+        - Documentation
+        - Packaging and dependencies
+        - Other
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add relevant examples, constraints, or links to upstream proposals.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to implement a fix?
+      description: See the [development guide](https://github.com/jiangxt2/daft-doris/blob/master/README.md#development) for local checks.
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true

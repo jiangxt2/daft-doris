@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a problem with daft-doris.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please search existing issues before reporting a bug. Remove credentials and private data from code, configuration, and logs.
+
+  - type: textarea
+    id: bug
+    attributes:
+      label: Describe the bug
+      description: Describe what happened, including relevant error messages as text.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: To Reproduce
+      description: Provide a minimal script and the steps needed to run it. Include sanitized table definitions and sample data if a Doris instance is required.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions / Dependencies
+      description: Include the connector, execution engine, database, Python, OS, and relevant driver versions.
+      placeholder: |
+        daft-doris:
+        Daft:
+        Python:
+        PyArrow:
+        Apache Doris:
+        OS:
+        Read transport or write operation:
+        Execution mode (native or Ray):
+        Ray and driver versions (if used):
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component(s)
+      multiple: true
+      options:
+        - Read (MySQL)
+        - Read (Flight SQL)
+        - Write (Stream Load)
+        - Predicate pushdown
+        - Schema and types
+        - Daft compatibility
+        - Ray execution
+        - Documentation
+        - Packaging and dependencies
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add sanitized logs, configuration, or other information that helps explain the problem.
+    validations:
+      required: false
