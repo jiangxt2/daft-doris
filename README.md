@@ -27,10 +27,10 @@ The package source and tests remain authoritative for exact API behavior.
 
 ## Installation
 
-This development checkout declares `1.1.dev0` and targets Daft 0.7.26. Use
+This source builds `daft-doris` 1.1 against Daft 0.7.26. Use
 `uv sync --locked --all-extras --group dev` to install this source revision.
-The published `1.0` package uses the earlier Daft 0.7.23 baseline; the PyPI
-commands below install a published release, not this development revision.
+The published `1.0` package used the earlier Daft 0.7.23 baseline. Package-index
+commands below install the latest published distribution.
 
 Install the MySQL read transport and Stream Load writer:
 
