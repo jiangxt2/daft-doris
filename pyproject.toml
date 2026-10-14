@@ -77,7 +77,7 @@ asyncio_mode = "auto"
 branch = true
 # Read transports are validated against a real Doris service; the unit gate covers
 # the shared contracts and the write path that can be exercised without a service.
-source = ["daft_doris._common", "daft_doris.write"]
+source = ["src/daft_doris/_common", "src/daft_doris/write"]
 
 [tool.coverage.report]
 fail_under = 80
