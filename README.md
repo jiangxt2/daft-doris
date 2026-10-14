@@ -10,8 +10,8 @@ The project is alpha software. Its verified compatibility profile is intentional
 
 | Component | Verified profile |
 |---|---|
-| Python | 3.12 primary real-service baseline; 3.13 resolver-compatible with a minimum native Stream Load/MySQL run |
-| Daft | 0.7.23 |
+| Python | 3.12 primary real-service baseline; 3.13 minimum installation and public-contract checks |
+| Daft | 0.7.26 |
 | PyArrow | 19.0.1 |
 | Apache Doris | 4.0.6 primary Docker certification target |
 
@@ -26,6 +26,11 @@ guides, then use the focused documentation for [writing](docs/writing.md),
 The package source and tests remain authoritative for exact API behavior.
 
 ## Installation
+
+This development checkout declares `1.1.dev0` and targets Daft 0.7.26. Use
+`uv sync --locked --all-extras --group dev` to install this source revision.
+The published `1.0` package uses the earlier Daft 0.7.23 baseline; the PyPI
+commands below install a published release, not this development revision.
 
 Install the MySQL read transport and Stream Load writer:
 

@@ -10,6 +10,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM apache/doris:be-4.0.6
+ARG BASE_IMAGE=apache/doris:be-4.0.6
+FROM ${BASE_IMAGE}
 
 COPY be.conf /opt/apache-doris/be/conf/be.conf

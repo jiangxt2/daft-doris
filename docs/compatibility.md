@@ -1,9 +1,9 @@
 # Compatibility
 
-The initial verification baseline is deliberately narrow:
+The source-development verification baseline is deliberately narrow:
 
-- Python 3.12 is the primary real-service baseline; Python 3.13 remains resolver-compatible and has a separate minimum native Stream Load/MySQL compatibility run;
-- Daft 0.7.23;
+- Python 3.12 is the primary real-service baseline; Python 3.13 has minimum installation and public-contract checks on this source baseline;
+- Daft 0.7.26;
 - PyArrow 19.0.1;
 - Doris 4.0.6 is the primary Docker certification profile;
 - PyMySQL 1.2.0 for metadata and MySQL reads;

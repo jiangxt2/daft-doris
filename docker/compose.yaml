@@ -14,9 +14,7 @@ name: daft-doris-it
 
 services:
   fe:
-    build:
-      context: .
-      dockerfile: fe.Dockerfile
+    image: ${DAFT_DORIS_FE_IT_IMAGE:-daft-doris-fe-it:local}
     hostname: daft-olap-doris-fe
     networks:
       doris:
@@ -37,9 +35,7 @@ services:
         hard: 200000
 
   be:
-    build:
-      context: .
-      dockerfile: be.Dockerfile
+    image: ${DAFT_DORIS_BE_IT_IMAGE:-daft-doris-be-it:local}
     hostname: daft-olap-doris-be
     depends_on:
       - fe
