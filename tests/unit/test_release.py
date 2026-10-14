@@ -25,6 +25,15 @@ assert _MODULE_SPEC.loader is not None
 validate_release_candidate = module_from_spec(_MODULE_SPEC)
 _MODULE_SPEC.loader.exec_module(validate_release_candidate)
 
+_POLICY_SPEC = spec_from_file_location(
+    "check_release_workflow",
+    Path(__file__).parents[2] / "scripts" / "check_release_workflow.py",
+)
+assert _POLICY_SPEC is not None
+assert _POLICY_SPEC.loader is not None
+check_release_workflow = module_from_spec(_POLICY_SPEC)
+_POLICY_SPEC.loader.exec_module(check_release_workflow)
+
 
 def test_annotated_tag_event_sha_is_peeled_before_identity_check(
     monkeypatch: pytest.MonkeyPatch,
@@ -67,3 +76,33 @@ def test_annotated_tag_event_sha_is_peeled_before_identity_check(
         call("rev-parse", "origin/master^{commit}"),
         call("rev-parse", f"{event_tag_object_sha}^{{commit}}"),
     ]
+
+
+def test_release_policy_rejects_static_candidate_version_output() -> None:
+    root = Path(__file__).parents[2]
+    ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    static_release = release.replace(
+        "version: ${{ steps.candidate.outputs.version }}",
+        'version: "1.0"',
+        1,
+    )
+
+    failures = check_release_workflow.release_policy_failures(ci, static_release)
+
+    assert any("validated package version" in failure for failure in failures)
+
+
+def test_release_policy_rejects_hardcoded_testpypi_smoke_version() -> None:
+    root = Path(__file__).parents[2]
+    ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    release = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    static_release = release.replace(
+        "VERSION: ${{ needs.candidate.outputs.version }}",
+        'VERSION: "1.0"',
+        1,
+    )
+
+    failures = check_release_workflow.release_policy_failures(ci, static_release)
+
+    assert any("testpypi-smoke must use" in failure for failure in failures)

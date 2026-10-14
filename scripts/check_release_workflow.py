@@ -86,6 +86,26 @@ def release_policy_failures(ci_workflow: str, release_workflow: str) -> tuple[st
         "github-release",
     ):
         require(bool(_job(release_workflow, job_id)), f"release is missing the {job_id} job")
+    candidate_job = _job(release_workflow, "candidate")
+    require(
+        "version: ${{ steps.candidate.outputs.version }}" in candidate_job
+        and "scripts/validate_release_candidate.py" in candidate_job
+        and '--expected-version "${EXPECTED_VERSION}"' in candidate_job,
+        "candidate job must expose the validated package version",
+    )
+    version_consumers = {
+        "build": '--version "${{ needs.candidate.outputs.version }}"',
+        "install-smoke": '--version "${{ needs.candidate.outputs.version }}"',
+        "testpypi-publish": '--version "${{ needs.candidate.outputs.version }}"',
+        "testpypi-smoke": "VERSION: ${{ needs.candidate.outputs.version }}",
+        "publish": '--version "${{ needs.candidate.outputs.version }}"',
+        "github-release": '--title "daft-doris ${{ needs.candidate.outputs.version }}"',
+    }
+    for job_id, version_reference in version_consumers.items():
+        require(
+            version_reference in _job(release_workflow, job_id),
+            f"{job_id} must use the validated candidate version",
+        )
     require(
         "uses: ./.github/workflows/ci.yml" in _job(release_workflow, "gates"),
         "release gates must call CI",
